@@ -68,18 +68,22 @@ public:
 	void reallocate()
 	{
 		cout<<"Before Pool::reallocate size="<<size<<" capacity="<<capacity<<endl;
+		for(int i=0; i<10; ++i) cout<<"===";
+		cout<<endl;
 		cout<<"REALLOC:"<<endl;
+		for(int i=0; i<10; ++i) cout<<"===";
+		cout<<endl;
 		const int new_capacity=capacity*2+1;
 		MemoryBlock<T> * new_buffer =
 			static_cast<MemoryBlock<T>*>(malloc(sizeof(MemoryBlock<T>) * new_capacity));
 		std::memcpy(new_buffer, buffer, size*sizeof(MemoryBlock<T>));
-		delete [] buffer;
+		free(buffer);
 		buffer=new_buffer;
 		//
 		bool * new_occupated =
 			static_cast<bool*>(malloc(sizeof(bool) * new_capacity));
 		std::memcpy(new_occupated, occupated, size*sizeof(bool));
-		delete [] occupated;
+		free(occupated);
 		occupated=new_occupated;
 		capacity=new_capacity;
 		cout<<"After Pool::reallocate size="<<size<<" capacity="<<capacity<<endl;
