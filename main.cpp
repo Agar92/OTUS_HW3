@@ -44,8 +44,8 @@ public:
 	~Pool()
 	{
 		cout<<"~Pool()"<<endl;
-		//delete [] buffer;
-		//delete [] occupated;
+		free(buffer);
+		free(occupated);
 	}
 	//
 	void* allocate()
@@ -132,7 +132,7 @@ class SimpleAllocator {
 public:
     using value_type = T;
 
-    SimpleAllocator()
+    SimpleAllocator() noexcept 
     {
     	cout<<__FUNCTION__<<endl;
     	pool=new Pool<T>(2);
