@@ -7,6 +7,7 @@
 #include <cstring>
 #include <memory>
 #include <cassert>
+#include "unistd.h"
 
 using namespace std;
 
@@ -19,14 +20,7 @@ int factorial(int n)
 
 template <typename T>
 struct MemoryBlock{
-	MemoryBlock()
-	{
-		cout<<"sizeof(this)="<<sizeof(this)<<" "
-		    <<"sizeof(*this)="<<sizeof(*this)<<" "
-		    <<"sizeof(T)="<<sizeof(T)<<" "
-		    <<"sizeof(string)="<<sizeof(std::string)
-		    <<endl;
-	}
+	MemoryBlock(){}
 	std::array<std::byte, sizeof(T)> memory; 
 };
 
@@ -35,20 +29,18 @@ class Pool{
 public:
 	Pool(size_t _size):capacity(_size),size(0)
 	{
-		cout<<"Pool()"<<endl;
-		buffer=static_cast<MemoryBlock<T>*>(malloc(sizeof(MemoryBlock<T>) * capacity));
-		occupated=new bool[capacity];
-		for(size_t i=0; i<capacity; ++i) occupated[i]=false;
-		//buffer=::operator new(size*sizeof(MemoryBlock<T>));
+		buffer=(MemoryBlock<T>*)(malloc(sizeof(MemoryBlock<T>) * capacity));
+		occupied=(bool*)(malloc(capacity));
+		for(size_t i=0; i<capacity; ++i) occupied[i]=false;
 	}
 	~Pool()
 	{
 		cout<<"~Pool()"<<endl;
-		free(buffer);
-		free(occupated);
+		//free(buffer);
+		//free(occupied);
 	}
 	//
-	void* allocate()
+	T* allocate(size_t n)
 	{
 		int index=find_vacant();
 		if(-1 == index)
@@ -56,74 +48,61 @@ public:
 			reallocate();
 			index=find_vacant();
 		}
-		size++;
-		cout<<"Pool::allocate size="<<size<<" index="<<index<<" capacity="<<capacity<<endl;
-		occupated[index]=true;
-		cout<<"1 index="<<index<<endl;
+		for(size_t j=0; j<n; ++j) occupied[size+j]=true;
 		MemoryBlock<T>* ptr = get(index);
-        if(ptr) return ptr;
+		size+=n;
+        if(ptr) return reinterpret_cast<T*>(ptr);
         throw std::bad_alloc();
 	}
 	//if not enough space, resize as: new_size=old_size*2+1
 	void reallocate()
 	{
-		cout<<"Before Pool::reallocate size="<<size<<" capacity="<<capacity<<endl;
-		for(int i=0; i<10; ++i) cout<<"===";
-		cout<<endl;
-		cout<<"REALLOC:"<<endl;
-		for(int i=0; i<10; ++i) cout<<"===";
-		cout<<endl;
 		const int new_capacity=capacity*2+1;
-		MemoryBlock<T> * new_buffer =
-			static_cast<MemoryBlock<T>*>(malloc(sizeof(MemoryBlock<T>) * new_capacity));
-		std::memcpy(new_buffer, buffer, size*sizeof(MemoryBlock<T>));
-		free(buffer);
-		buffer=new_buffer;
-		//
-		bool * new_occupated =
-			static_cast<bool*>(malloc(sizeof(bool) * new_capacity));
-		std::memcpy(new_occupated, occupated, size*sizeof(bool));
-		free(occupated);
-		occupated=new_occupated;
+		new_buffer=(MemoryBlock<T>*)(malloc(sizeof(MemoryBlock<T>) * new_capacity));
+		//std::memcpy(new_buffer, buffer, size*sizeof(MemoryBlock<T>));
+		//free(buffer);
+	  //buffer=new_buffer;
+		new_occupied=(bool*)(malloc(sizeof(bool) * new_capacity));
+		//std::memcpy(new_occupied, occupied, size*sizeof(bool));
+		for(size_t i=size; i<(size_t)new_capacity; ++i) occupied[i]=false;
+		//free(occupied);
+	  //occupied=new_occupied;
 		capacity=new_capacity;
-		cout<<"After Pool::reallocate size="<<size<<" capacity="<<capacity<<endl;
 	}
 	void deallocate(T* ptr)
 	{
 		(void) ptr;
-		//delete ptr;
 	}
 	//find a first vacant MemoryBlock in the array "buffer" from left to right for filling it in with the data:
 	int find_vacant()
 	{
-		cout<<"Before Pool::find_vacant size="<<size<<endl;
 		int index=-1;
 		for(int i=0; i<(int)capacity; ++i)
 		{
-			if(!occupated[i])
+			if(!occupied[i])
 			{
 				index=i;
 				break;
 			}
 		}
-		cout<<"After Pool::find_vacant size="<<size<<" index="<<index<<endl;
 		return index;
 	}
 	//return a raw pointer to an "index" item in the array "buffer": 
 	MemoryBlock<T>* get(int index) const
 	{
-		cout<<"Pool::get"<<endl;
-		cout<<"2.1 index="<<index<<endl;
-		assert(index > -1 && index < (int)size);
-		cout<<"2.2 index="<<index<<endl;
-		return &buffer[index];
+		if(index<2)
+			return &buffer[index];
+		else
+			return &new_buffer[index-2];
 	}
 private:
 	static const int allocation_number=0;
 	size_t capacity;
 	size_t size;
-	bool * occupated;
+	bool * occupied;
 	MemoryBlock<T> * buffer;
+	MemoryBlock<T> * new_buffer;
+	bool * new_occupied;
 };
 
 
@@ -134,31 +113,26 @@ public:
 
     SimpleAllocator() noexcept 
     {
-    	cout<<__FUNCTION__<<endl;
     	pool=new Pool<T>(2);
 
     }
     ~SimpleAllocator()
     {
-    	cout<<__FUNCTION__<<endl;
     	delete pool;
     }
     
     template <typename U>
     SimpleAllocator(const SimpleAllocator<U>& other) {
-    	cout<<__FUNCTION__<<endl;
         (void) other;
     }
     
     T* allocate(size_t n) {
-    	std::cout<<"SimpleAllocator::allocate"<<" n="<<n<<std::endl;
-        auto ptr = (T*)pool->allocate();//static_cast<T*>(malloc(sizeof(T) * n));
+        auto ptr = (T*)pool->allocate(n);//static_cast<T*>(malloc(sizeof(T) * n));
         if (ptr) return ptr;
         throw std::bad_alloc();
     }
     
     void deallocate(T* ptr, size_t n) {
-    	cout<<__FUNCTION__<<endl;
         (void) n;
         (void) ptr;
         pool->deallocate(ptr);
@@ -175,12 +149,14 @@ private:
 
 template <typename T, typename U>
 bool operator==(const SimpleAllocator<T>& a1, const SimpleAllocator<U>& a2) {
+	cout<<"operator==(const SimpleAllocator<T>& a1, const SimpleAllocator<U>& a2)"<<endl;
     (void) a1; (void) a2;
     return true;
 }
 
 template <typename T, typename U>
 bool operator!=(const SimpleAllocator<T>& a1, const SimpleAllocator<U>& a2) {
+	cout<<"operator!=(const SimpleAllocator<T>& a1, const SimpleAllocator<U>& a2)"<<endl;
     (void) a1; (void) a2;
     return false;
 }
@@ -196,7 +172,11 @@ int main()
     cout<<"START:"<<endl;
     std::map<int, int, std::less<int>, SimpleAllocator<std::pair<const int,std::string>>> m2;
     cout<<"START FILLING THE MAP:"<<endl;
-	for(int i=0; i<=2; ++i) m2[i]=factorial(i);
+	for(int i=0; i<=10; ++i)
+	{
+		m2[i]=factorial(i);
+		cout<<"m2["<<i<<"]="<<m2[i]<<" factorial(i)="<<factorial(i)<<endl;
+	}
 	cout<<"ENTER"<<endl;
 	int i=0;
 ////auto it=m2.begin();
@@ -210,6 +190,7 @@ int main()
     	    <<" | "<<m2.begin()->first<<" "<<m2.begin()->second
     	    <<" | "<<m2.end()->first<<" "<<m2.end()->second
     	    <<endl;
+			//sleep(1);
     }
     cout<<"EXIT"<<endl;
     //3//
@@ -217,3 +198,7 @@ int main()
 
 	return 0;
 }
+
+
+
+// https://sjbrown.co.uk/posts/pooled-allocators-for-the-stl/
