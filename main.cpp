@@ -36,8 +36,10 @@ public:
 	~Pool()
 	{
 		cout<<"~Pool()"<<endl;
-		//free(buffer);
-		//free(occupied);
+		free(buffer);
+		free(occupied);
+		free(new_buffer);
+		free(new_occupied);
 	}
 	//
 	T* allocate(size_t n)
