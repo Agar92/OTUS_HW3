@@ -8,6 +8,7 @@
 #include <memory>
 #include <cassert>
 #include "unistd.h"
+#include <tuple>
 
 using namespace std;
 
@@ -27,84 +28,121 @@ struct MemoryBlock{
 template <typename T>
 class Pool{
 public:
+	std::tuple<MemoryBlock<T>*,bool*> createBuffer(size_t SIZE)
+	{
+		MemoryBlock<T>* buffer=(MemoryBlock<T>*)(malloc(sizeof(MemoryBlock<T>) * SIZE));
+		bool* occupied=(bool*)(malloc(SIZE));
+		for(size_t i=0; i<SIZE; ++i) occupied[i]=false;
+		return std::make_tuple(buffer,occupied);
+	}
 	Pool(size_t _size):capacity(_size),size(0)
 	{
-		buffer=(MemoryBlock<T>*)(malloc(sizeof(MemoryBlock<T>) * capacity));
-		occupied=(bool*)(malloc(capacity));
-		for(size_t i=0; i<capacity; ++i) occupied[i]=false;
+		const auto tup=createBuffer(capacity);
+		buffers.push_back ( std::get<0>(tup) );
+		occupied.push_back( std::get<1>(tup) );
+		sizes.push_back(capacity);
+		counters.push_back(0);
 	}
 	~Pool()
 	{
-		cout<<"~Pool()"<<endl;
-		free(buffer);
-		free(occupied);
-		free(new_buffer);
-		free(new_occupied);
+	  //cout<<"~Pool()"<<endl;
+		for(size_t i=0; i<buffers.size(); ++i) if(buffers.at(i)) free(buffers.at(i));
+		for(size_t i=0; i<occupied.size(); ++i) if(occupied.at(i)) free(occupied.at(i));
 	}
 	//
 	T* allocate(size_t n)
 	{
-		int index=find_vacant();
+/*
+		cout<<"Pool::allocate("<<n<<")   buffers.size()="<<buffers.size()<<endl;
+		cout<<"sizes of buffers:";
+		for(size_t i=0; i<buffers.size(); ++i) cout<<sizes.size()<<" ";
+		cout<<endl;
+*/
+		int LastBufferIndex=buffers.size()-1;
+		int index=find_vacant_block( LastBufferIndex, n );
 		if(-1 == index)
 		{
 			reallocate();
-			index=find_vacant();
+			LastBufferIndex=buffers.size()-1;
+			index=find_vacant_block(LastBufferIndex, n);
 		}
-		for(size_t j=0; j<n; ++j) occupied[size+j]=true;
-		MemoryBlock<T>* ptr = get(index);
-		size+=n;
+		for(size_t j=0; j<n; ++j) occupied.at(LastBufferIndex)[counters.at(LastBufferIndex)+j]=true;
+	  //cout<<"@#@ LastBufferIndex="<<LastBufferIndex<<" index="<<index<<endl;
+		MemoryBlock<T>* ptr = get(LastBufferIndex, index);
+		//size+=n;
+/*
+		cout<<"counters.at("<<LastBufferIndex<<") before update="<<counters.at(LastBufferIndex)<<endl;
+*/
+		counters.at(LastBufferIndex) += n;
+/*
+		cout<<"counters.at("<<LastBufferIndex<<") after update="<<counters.at(LastBufferIndex)<<endl;
+*/
         if(ptr) return reinterpret_cast<T*>(ptr);
         throw std::bad_alloc();
 	}
 	//if not enough space, resize as: new_size=old_size*2+1
 	void reallocate()
 	{
-		const int new_capacity=capacity*2+1;
-		new_buffer=(MemoryBlock<T>*)(malloc(sizeof(MemoryBlock<T>) * new_capacity));
-		//std::memcpy(new_buffer, buffer, size*sizeof(MemoryBlock<T>));
-		//free(buffer);
-	  //buffer=new_buffer;
-		new_occupied=(bool*)(malloc(sizeof(bool) * new_capacity));
-		//std::memcpy(new_occupied, occupied, size*sizeof(bool));
-		for(size_t i=size; i<(size_t)new_capacity; ++i) occupied[i]=false;
-		//free(occupied);
-	  //occupied=new_occupied;
-		capacity=new_capacity;
+		int old_capacity=capacity;
+		(void)old_capacity;
+		capacity=capacity*2+1;
+/*
+		cout<<"REALLOC: old_capacity"<<old_capacity
+		    <<" new_capacity="<<capacity
+		    <<endl;
+*/
+		const auto tup=createBuffer(capacity);
+		buffers.push_back ( std::get<0>(tup) );
+		occupied.push_back( std::get<1>(tup) );
+		sizes.push_back(capacity);
+/*
+		cout<<"sizes of buffers: capacity="<<capacity<<" sizes.size()="<<sizes.size()<<"   ";
+		for(size_t i=0; i<buffers.size(); ++i) cout<<sizes.at(i)<<" ";
+		cout<<endl;
+*/
+		counters.push_back(0);
 	}
 	void deallocate(T* ptr)
 	{
 		(void) ptr;
 	}
-	//find a first vacant MemoryBlock in the array "buffer" from left to right for filling it in with the data:
-	int find_vacant()
+	int find_vacant_block(int BufferIndex, int n)
 	{
-		int index=-1;
-		for(int i=0; i<(int)capacity; ++i)
+		int BlockIndex=-1;
+		for(int i=counters.at(BufferIndex); i<sizes.at(BufferIndex); ++i)
 		{
-			if(!occupied[i])
+			if( !occupied.at(BufferIndex)[i] )
 			{
-				index=i;
-				break;
+				bool flag=true;
+				for(int j=1; j<n; ++i)
+				{
+					if( occupied.at(BufferIndex)[i+j] ){flag=false; break;}
+				}
+				if(flag)
+				{
+					BlockIndex=i;
+					break;
+				}
+				else continue;
 			}
 		}
-		return index;
+	  //cout<<"Pool::find_vacant_block("<<BufferIndex<<", "<<n<<"):   "<<endl;
+		return BlockIndex;
 	}
 	//return a raw pointer to an "index" item in the array "buffer": 
-	MemoryBlock<T>* get(int index) const
+	MemoryBlock<T>* get(int BufferIndex, int index) const
 	{
-		if(index<2)
-			return &buffer[index];
-		else
-			return &new_buffer[index-2];
+		return &buffers.at( BufferIndex )[ index ];
 	}
 private:
 	static const int allocation_number=0;
 	size_t capacity;
 	size_t size;
-	bool * occupied;
-	MemoryBlock<T> * buffer;
-	MemoryBlock<T> * new_buffer;
-	bool * new_occupied;
+
+	vector<int> counters;
+	vector<int> sizes;
+	vector<bool*> occupied;
+	vector<MemoryBlock<T>*> buffers;
 };
 
 
@@ -130,6 +168,7 @@ public:
     
     T* allocate(size_t n) {
         auto ptr = (T*)pool->allocate(n);//static_cast<T*>(malloc(sizeof(T) * n));
+	  //cout<<"SimpleAllocator::allocate("<<n<<"):   address="<<ptr<<endl;
         if (ptr) return ptr;
         throw std::bad_alloc();
     }
@@ -151,14 +190,12 @@ private:
 
 template <typename T, typename U>
 bool operator==(const SimpleAllocator<T>& a1, const SimpleAllocator<U>& a2) {
-	cout<<"operator==(const SimpleAllocator<T>& a1, const SimpleAllocator<U>& a2)"<<endl;
     (void) a1; (void) a2;
     return true;
 }
 
 template <typename T, typename U>
 bool operator!=(const SimpleAllocator<T>& a1, const SimpleAllocator<U>& a2) {
-	cout<<"operator!=(const SimpleAllocator<T>& a1, const SimpleAllocator<U>& a2)"<<endl;
     (void) a1; (void) a2;
     return false;
 }
@@ -171,33 +208,14 @@ int main()
     for(int i=0; i<=9; ++i) m1[i]=factorial(i);
     for(auto [x,y] : m1) cout<<x<<" "<<y<<endl;
     //2//
-    cout<<"START:"<<endl;
     std::map<int, int, std::less<int>, SimpleAllocator<std::pair<const int,std::string>>> m2;
-    cout<<"START FILLING THE MAP:"<<endl;
-	for(int i=0; i<=10; ++i)
-	{
-		m2[i]=factorial(i);
-		cout<<"m2["<<i<<"]="<<m2[i]<<" factorial(i)="<<factorial(i)<<endl;
-	}
-	cout<<"ENTER"<<endl;
+	for(int i=0; i<=10; ++i) m2[i]=factorial(i);
 	int i=0;
-////auto it=m2.begin();
     for(auto it=m2.begin(); it!=m2.end(); ++it)
-////for(int i=0; i<3; ++i)
     {
-////////std::next(it);
     	i++;
-    	cout<<"#"<<i<<":"<<endl;
-    	cout<<it->first<<" "<<it->second
-    	    <<" | "<<m2.begin()->first<<" "<<m2.begin()->second
-    	    <<" | "<<m2.end()->first<<" "<<m2.end()->second
-    	    <<endl;
-			//sleep(1);
-    }
-    cout<<"EXIT"<<endl;
-    //3//
-	
-
+    	cout<<it->first<<" "<<it->second<<endl;
+	}
 	return 0;
 }
 
